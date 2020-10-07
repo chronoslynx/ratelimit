@@ -2,6 +2,7 @@ package ratelimit_test
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -47,10 +48,6 @@ func TestUnlimited(t *testing.T) {
 }
 
 func TestRateLimiter(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	defer wg.Wait()
-
 	clock := clock.NewMock()
 	rl := ratelimit.New(100, ratelimit.WithClock(clock), ratelimit.WithoutSlack)
 
@@ -66,32 +63,40 @@ func TestRateLimiter(t *testing.T) {
 	go job(rl, count, done)
 	go job(rl, count, done)
 
-	clock.AfterFunc(1*time.Second, func() {
-		assert.InDelta(t, 100, count.Load(), 10, "count within rate limit")
-	})
+	// We need to make sure that at least one of the above goroutines
+	// ran and scheduled clock timers.
+	runtime.Gosched()
 
-	clock.AfterFunc(2*time.Second, func() {
-		assert.InDelta(t, 200, count.Load(), 10, "count within rate limit")
-	})
+	var (
+		// Used to make sure all assert goroutintes are started.
+		wgStart sync.WaitGroup
+		// Used to wait for final result assert.
+		wgResults sync.WaitGroup
+	)
+	defer wgResults.Wait()
 
-	clock.AfterFunc(3*time.Second, func() {
-		assert.InDelta(t, 300, count.Load(), 10, "count within rate limit")
-		wg.Done()
-	})
+	waitAssert(t, clock, wgStart, wgResults, count, 1*time.Second, 100)
+	waitAssert(t, clock, wgStart, wgResults, count, 2*time.Second, 200)
+	waitAssert(t, clock, wgStart, wgResults, count, 3*time.Second, 300)
 
-	clock.Add(4 * time.Second)
+	wgStart.Wait()
+	clock.Add(3 * time.Second)
 }
 
 func TestDelayedRateLimiter(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	defer wg.Wait()
-
 	clock := clock.NewMock()
 	slow := ratelimit.New(10, ratelimit.WithClock(clock))
 	fast := ratelimit.New(100, ratelimit.WithClock(clock))
 
 	count := atomic.NewInt32(0)
+
+	var (
+		// Used to make sure all assert goroutintes are started.
+		wgStart sync.WaitGroup
+		// Used to wait for final result assert.
+		wgResults sync.WaitGroup
+	)
+	defer wgResults.Wait()
 
 	// Until we're done...
 	done := make(chan struct{})
@@ -111,21 +116,25 @@ func TestDelayedRateLimiter(t *testing.T) {
 		}
 	}()
 
-	// Accumulate slack for 10 seconds,
-	clock.AfterFunc(20*time.Second, func() {
+	// We need to make sure that the above goroutine
+	// ran and scheduled clock events.
+	runtime.Gosched()
+
+	wgStart.Add(1)
+	go func() {
+		wgStart.Done()
+		// Accumulate slack for 20 seconds,
+		clock.Sleep(20 * time.Second)
 		// Then start working.
 		go job(fast, count, done)
 		go job(fast, count, done)
 		go job(fast, count, done)
 		go job(fast, count, done)
-	})
+	}()
 
-	clock.AfterFunc(30*time.Second, func() {
-		assert.InDelta(t, 1200, count.Load(), 10, "count within rate limit")
-		wg.Done()
-	})
-
-	clock.Add(40 * time.Second)
+	waitAssert(t, clock, wgStart, wgResults, count, 30*time.Second, 1200)
+	wgStart.Wait()
+	clock.Add(30 * time.Second)
 }
 
 func job(rl ratelimit.Limiter, count *atomic.Int32, done <-chan struct{}) {
@@ -138,4 +147,26 @@ func job(rl ratelimit.Limiter, count *atomic.Int32, done <-chan struct{}) {
 		default:
 		}
 	}
+}
+
+// waitAssert is an util function that schedules an assert check
+// at a given time in the future.
+// TODO all setup code to a testRunner so that we don't need to pass
+// the parameters around.
+func waitAssert(
+	t *testing.T,
+	clock *clock.Mock,
+	wgStart, wgResults sync.WaitGroup,
+	count *atomic.Int32,
+	sleep time.Duration,
+	target int,
+) {
+	wgStart.Add(1)
+	go func() {
+		wgResults.Add(1)
+		wgStart.Done()
+		clock.Sleep(sleep)
+		assert.InDelta(t, target, count.Load(), 10, "count within rate limit")
+		wgResults.Done()
+	}()
 }

@@ -49,7 +49,7 @@ func (m *Mock) Add(d time.Duration) {
 	// Calculate the final time.
 	end := m.now.Add(d)
 
-	for len(m.timers) > 0 && m.now.Before(end) {
+	for len(m.timers) > 0 && (m.now.Before(end) || m.now.Equal(end)) {
 		t := heap.Pop(&m.timers).(*Timer)
 		m.now = t.next
 		m.Unlock()
@@ -84,18 +84,6 @@ func (m *Mock) addTimer(t *Timer) {
 // After produces a channel that will emit the time after a duration passes.
 func (m *Mock) After(d time.Duration) <-chan time.Time {
 	return m.Timer(d).C
-}
-
-// AfterFunc waits for the duration to elapse and then executes a function.
-// A Timer is returned that can be stopped.
-func (m *Mock) AfterFunc(d time.Duration, f func()) *Timer {
-	t := m.Timer(d)
-	go func() {
-		<-t.c
-		f()
-	}()
-	nap()
-	return t
 }
 
 // Now returns the current wall time on the mock clock.
