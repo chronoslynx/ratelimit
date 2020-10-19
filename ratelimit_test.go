@@ -162,8 +162,8 @@ func waitAssert(
 	target int,
 ) {
 	wgStart.Add(1)
+	wgResults.Add(1)
 	go func() {
-		wgResults.Add(1)
 		wgStart.Done()
 		clock.Sleep(sleep)
 		assert.InDelta(t, target, count.Load(), 10, "count within rate limit")

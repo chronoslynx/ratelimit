@@ -64,6 +64,8 @@ func (m *Mock) Add(d time.Duration) {
 
 // Timer produces a timer that will emit a time some duration after now.
 func (m *Mock) Timer(d time.Duration) *Timer {
+	m.Lock()
+	defer m.Unlock()
 	ch := make(chan time.Time)
 	t := &Timer{
 		C:    ch,
@@ -76,8 +78,6 @@ func (m *Mock) Timer(d time.Duration) *Timer {
 }
 
 func (m *Mock) addTimer(t *Timer) {
-	m.Lock()
-	defer m.Unlock()
 	heap.Push(&m.timers, t)
 }
 
